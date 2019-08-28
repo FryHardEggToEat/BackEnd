@@ -1,9 +1,12 @@
 from flask import Flask, redirect, request
+from flask_cors import CORS
 import json
 import atexit
 import pickle
+from datetime import datetime
 
 app = Flask(__name__)
+CORS(app)
 
 # load database from pickle
 try:
@@ -17,6 +20,10 @@ try:
                 sensor_log = pickle.load(f)
         with open("database(sensor_parsed)", "rb") as f:
                 sensor_parsed = pickle.load(f)
+        with open("database(total_amount)", "rb") as f:
+                total_amount = pickle.load(f)
+        with open("database(donate_log)", "rb") as f:
+                donate_log = pickle.load(f)
 except OSError as e:
         print("Reconstructing all data...")
         # baby: {username:{ppl_cnt,favor,money}
@@ -29,7 +36,12 @@ except OSError as e:
         sensor_log = []
         # parsed sensor data: {id,deviceId,time,ppl_cnt,favor}
         sensor_parsed = []
+        # donate log: {time: (username, money)}
+        donate_log = {}
         # dict: deviceId->location
+        id_to_location = {}
+        # total amount
+        total_amount = [0]
 
 url = "127.0.0.1:5000"
 
@@ -43,10 +55,14 @@ def home():
 
 @app.route('/daddy/<username>')
 def daddy(username):
-        if username in dict_baby_db:
+        if username in dict_daddy_db:
                 return parsed_daddy(username)
         else:
                 return "This is not a daddy :("
+
+@app.route('/daddy/log')
+def daddy_log():
+        return json.dumps(donate_log)
 
 @app.route('/baby/<username>')
 def baby(username):
@@ -54,6 +70,21 @@ def baby(username):
                 return parsed_baby(username)
         else:
                 return "This is not a baby :("
+
+@app.route('/baby/all')
+def baby_all():
+        return json.dumps(dict_baby_db)
+
+@app.route('/distribute')
+def distribute():
+        ppl_sum = 0
+        for usr in dict_baby_db:
+                ppl_sum += dict_baby_db[usr]["ppl_cnt"]
+        unit = total_amount[0] / ppl_sum
+        for usr in dict_baby_db:
+                dict_baby_db[usr]["money"] += int(unit * dict_baby_db[usr]["ppl_cnt"])
+        total_amount[0] = 0
+        return json.dumps({"who":"昶劭!"})
 
 @app.route('/events')
 def events():
@@ -67,9 +98,14 @@ def events_query(query):
                         queried.append(event)
         return str(queried)
 
+@app.route('/total')
+def total():
+        return str(total_amount[0])
+
 @app.route('/post/sensor', methods=['POST'])
 def post():
         data = request.data
+        print("data:", data)
         sensor_log.append(data)
         parse_sensor_data(data)
         return str(data)
@@ -77,6 +113,37 @@ def post():
 @app.route('/post/sensor/log')
 def post_log():
         return str(sensor_parsed)
+
+@app.route('/post/new_daddy', methods=['POST'])
+def post_new_daddy():
+        data = request.data
+        print("data:", data)
+        decoded = data.decode("UTF-8")
+        listed = decoded.split(" ")
+        if int(listed[1]) < 0:
+                return data
+        add_daddy(listed[0], "", listed[1])
+        total_amount[0] += int(listed[1])
+        donate_log[datetime.now().strftime("%Y%m%d %H:%M:%S")] = (listed[0], listed[1])
+        return data
+
+@app.route('/post/new_baby', methods=['POST'])
+def post_new_baby():
+        data = request.data
+        print("data:", data)
+        decoded = data.decode("UTF-8")
+        loaded = json.loads(decoded)
+        add_baby(loaded.get("username"), 0, 0, 0)
+        return data
+
+@app.route('/post/new_event', methods=['POST'])
+def new_event():
+        data = request.data
+        print("data:", data)
+        decoded = data.decode("UTF-8")
+        listed = decoded.split(" ")
+        add_registration(listed[0], listed[1], listed[2], listed[3])
+        return data
 
 def add_daddy(username, pswd, money):
         if username in dict_daddy_db:
@@ -87,7 +154,7 @@ def add_daddy(username, pswd, money):
                         "money":money }
                 return True
 
-def add_baby(username, ppl_cnt, favor, money):
+def add_baby(username, ppl_cnt:int, favor, money:int):
         if username in dict_baby_db:
                 return False
         else:
@@ -97,9 +164,9 @@ def add_baby(username, ppl_cnt, favor, money):
                         "money":money }
                 return True
 
-def add_registration(location, time, name):
+def add_registration(location, s_time, e_time, name):
         if name in dict_baby_db:
-                list_registration_db.append((location, time, name))
+                list_registration_db.append((location, s_time, e_time, name))
                 return True
         else:
                 return False
@@ -138,15 +205,20 @@ def pickle_persistent_data():
                 pickle.dump(sensor_log,f)
         with open("database(sensor_parsed)", "wb") as f:
                 pickle.dump(sensor_parsed,f)
+        with open("database(total_amount)", "wb") as f:
+                pickle.dump(total_amount,f)
+        with open("database(donate_log)", "wb") as f:
+                pickle.dump(donate_log,f)
         f.close()
 
 # Pre-existing data
-add_baby(username="秉玨", ppl_cnt="100", favor="200", money="500")
-add_baby(username="英弘", ppl_cnt="10", favor="60", money="1000")
-add_baby(username="Ian", ppl_cnt="100", favor="200", money="500")
+"""
+add_baby(username="秉玨", ppl_cnt=100, favor=200, money=0)
+add_baby(username="英弘", ppl_cnt=10, favor=60, money=0)
+add_baby(username="Ian", ppl_cnt=100, favor=200, money=0)
+add_baby(username="劭爺", ppl_cnt=10000, favor=20000, money=0)
 add_registration("7F", "2019-08-27 18:22:32", "秉玨")
-add_registration("Room", "2019-08-27 20:46:30", "秉玨")
-add_registration("Room", "2019-08-27 23:15:07", "英弘")
+"""
 
 # at exit, store all important files
 atexit.register(pickle_persistent_data)
